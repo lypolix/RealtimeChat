@@ -3,3 +3,4 @@ server:
 database:
   host: "localhost"
   user: "postgres"
+
