@@ -1,10 +1,11 @@
 package auth
 
 import (
-	"errors"
 	"golang.org/x/crypto/bcrypt"
-	"RealtimeChat/internal/auth/models"
 
+	"errors"
+
+	"RealtimeChat/internal/auth/models"
 )
 
 // Service содержит бизнес-логику аутентификации
@@ -44,7 +45,7 @@ func (s *Service) Login(email, password string) (string, error) {
 
 // Вспомогательные методы (реализуйте их)
 func (s *Service) getUserByEmail(email string) (*models.User, error) {
-	
+
 	// Заглушка - реализуйте получение пользователя из БД
 	return &models.User{
 		ID:           "123",

@@ -1,15 +1,15 @@
 package main
 
 import (
+	"github.com/golang-jwt/jwt/v5"
+
 	"crypto/rsa"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
-	"github.com/golang-jwt/jwt/v5"
-	
-	// Локальные импорты (убедитесь, что go.mod настроен правильно)
-	"RealtimeChat/internal/auth"  // Импорт пакета auth
+
+	"RealtimeChat/internal/auth"
 )
 
 var (
