@@ -55,3 +55,24 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(AuthResponse{Token: token})
 }
+
+// Register обрабатывает запрос на создание нового пользователя
+func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodPost {
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+        return
+    }
+    var req Credentials
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        http.Error(w, "Invalid request body", http.StatusBadRequest)
+        return
+    }
+    // Вызовем сервис регистрации
+    err := h.service.Register(req.Email, req.Password)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusBadRequest)
+        return
+    }
+    w.WriteHeader(http.StatusCreated)
+    w.Write([]byte("User created"))
+}
