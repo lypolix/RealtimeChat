@@ -1,0 +1,9 @@
+server:
+  host: "localhost"
+  port: "8080"
+database:
+  name: "realtimechat"
+  user: "postgres"
+  password: "postgres"
+  host: "postgres"
+  port: "5432"
