@@ -1,5 +1,4 @@
-curl -X POST http://localhost:8080/register \
-  -H "Content-Type: application/json" \
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
