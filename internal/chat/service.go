@@ -97,3 +97,19 @@ func (s *Service) SaveMessage(userID string, recipientUserID *string, content st
     _, err := s.db.ExecContext(ctx, query, userID, recipientUserID, content)
     return err
 }
+
+func (s *Service) SaveAttachment(messageID, userID, filePath, fileName, mimeType string) error {
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+    query := `INSERT INTO attachments (message_id, user_id, file_path, file_name, mime_type) VALUES ($1, $2, $3, $4, $5)`
+    _, err := s.db.ExecContext(ctx, query, messageID, userID, filePath, fileName, mimeType)
+    return err
+}
+
+func (s *Service) SaveMessageWithID(messageID, userID string, recipientUserID *string, content string) error {
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+    query := `INSERT INTO messages (id, user_id, recipient_user_id, content) VALUES ($1, $2, $3, $4)`
+    _, err := s.db.ExecContext(ctx, query, messageID, userID, recipientUserID, content)
+    return err
+}

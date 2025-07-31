@@ -12,6 +12,7 @@ import (
 )
 
 func main() {
+
     // Загрузка конфигурации
     cfg := config.MustLoad()
 
@@ -70,6 +71,8 @@ func main() {
         email := path[len(prefix):]
         chatHandler.GetConversationMessages(w, r, email)
     })))
+
+    http.Handle("/messages/attachment", shared.JWTMiddleware(http.HandlerFunc(chatHandler.PostMessageWithAttachment)))
 
     // WebSocket эндпоинт (JWT обязателен)
     http.Handle("/ws", shared.JWTMiddleware(http.HandlerFunc(chatHandler.WebSocket)))

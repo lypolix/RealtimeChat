@@ -1,1 +1,7 @@
 config/private.pem
+
+storage
+
+# IDE
+.idea/
+.vscode/

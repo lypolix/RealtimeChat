@@ -7,6 +7,9 @@ import (
     "time"
     "github.com/gorilla/websocket"
     "github.com/golang-jwt/jwt/v5"
+    "io"
+    "os"
+    "github.com/google/uuid"
 )
 
 type Handler struct {
@@ -92,6 +95,61 @@ func (h *Handler) GetConversationMessages(w http.ResponseWriter, r *http.Request
     }
     w.Header().Set("Content-Type", "application/json")
     json.NewEncoder(w).Encode(messages)
+}
+
+func (h *Handler) PostMessageWithAttachment(w http.ResponseWriter, r *http.Request) {
+    // 1. Проверка токена (см. Chat/PostMessage)
+    claims, ok := r.Context().Value("userClaims").(jwt.MapClaims)
+    if !ok { http.Error(w, "Unauthorized", http.StatusUnauthorized); return }
+    userID := fmt.Sprintf("%v", claims["user_id"])
+    if userID == "" || userID == "<nil>" {
+        http.Error(w, "Unauthorized", http.StatusUnauthorized)
+        return
+    }
+
+    // 2. Разбор multipart формы
+    err := r.ParseMultipartForm(10 << 20) // 10MB макс.
+    if err != nil {
+        http.Error(w, "Could not parse multipart form", http.StatusBadRequest)
+        return
+    }
+
+    // 3. Получи обязательные текстовые поля
+    content := r.FormValue("content")
+    if content == "" {
+        http.Error(w, "Content is required", http.StatusBadRequest)
+        return
+    }
+    // 4. Получи файл
+    file, handler, err := r.FormFile("file")
+    if err != nil {
+        http.Error(w, "File is required", http.StatusBadRequest)
+        return
+    }
+    defer file.Close()
+
+    // 5. Сохрани файл на диск (например, storage/{новоеимя})
+    filePath := fmt.Sprintf("storage/%d_%s", time.Now().UnixNano(), handler.Filename)
+    out, err := os.Create(filePath)
+    if err != nil { http.Error(w, "Could not save file", http.StatusInternalServerError); return }
+    defer out.Close()
+    _, err = io.Copy(out, file)
+    if err != nil { http.Error(w, "Could not save file", http.StatusInternalServerError); return }
+
+    // 6. Сохрани message как обычно
+    messageID := uuid.NewString() // или получи из insert
+    if err := h.service.SaveMessageWithID(messageID, userID, nil, content); err != nil {
+        http.Error(w, "Failed to save message", http.StatusInternalServerError)
+        return
+    }
+
+    // 7. Сохрани attachment
+    if err := h.service.SaveAttachment(messageID, userID, filePath, handler.Filename, handler.Header.Get("Content-Type")); err != nil {
+        http.Error(w, "Failed to save attachment", http.StatusInternalServerError)
+        return
+    }
+    w.WriteHeader(http.StatusCreated)
+    json.NewEncoder(w).Encode(map[string]string{"message_id": messageID})
 }
 
 // WebSocket для онлайн-чата

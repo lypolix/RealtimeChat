@@ -10,6 +10,7 @@ services:
       postgres:
         condition: service_healthy
     volumes:
+      - ./storage:/app/storage
       - ./config:/app/config
       - ./.env:/app/.env
     networks:
