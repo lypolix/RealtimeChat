@@ -1,0 +1,2 @@
+ALTER TABLE messages
+ADD COLUMN IF NOT EXISTS recipient_user_id UUID NULL REFERENCES users(id);

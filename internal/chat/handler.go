@@ -5,14 +5,16 @@ import (
     "fmt"
     "net/http"
     "time"
-
     "github.com/gorilla/websocket"
     "github.com/golang-jwt/jwt/v5"
+    "io"
+    "os"
+    "github.com/google/uuid"
 )
 
 type Handler struct {
     service *Service
-    clients map[string]*websocket.Conn // userID → conn
+    clients map[string]*websocket.Conn
 }
 
 func NewHandler(service *Service) *Handler {
@@ -22,7 +24,7 @@ func NewHandler(service *Service) *Handler {
     }
 }
 
-// POST /messages
+// Отправка сообщения в общий чат
 func (h *Handler) PostMessage(w http.ResponseWriter, r *http.Request) {
     claims, ok := r.Context().Value("userClaims").(jwt.MapClaims)
     if !ok {
@@ -35,32 +37,125 @@ func (h *Handler) PostMessage(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    var req struct{ Content string }
+    var req struct {
+        Content   string  `json:"content"`
+        Recipient *string `json:"recipient"`
+    }
     if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
         http.Error(w, "Invalid request body", http.StatusBadRequest)
         return
     }
-    if err := h.service.SaveMessage(userID, req.Content); err != nil {
+    var recipientUserID *string = nil
+    if req.Recipient != nil && *req.Recipient != "" {
+        var id string
+        err := h.service.db.QueryRowContext(
+            r.Context(),
+            `SELECT id FROM users WHERE email = $1`,
+            *req.Recipient,
+        ).Scan(&id)
+        if err != nil {
+            http.Error(w, "Recipient user not found", http.StatusBadRequest)
+            return
+        }
+        recipientUserID = &id
+    }
+    if err := h.service.SaveMessage(userID, recipientUserID, req.Content); err != nil {
         http.Error(w, "Failed to save message", http.StatusInternalServerError)
         return
     }
     w.WriteHeader(http.StatusCreated)
 }
 
-// GET /messages
+// Получение истории сообщений общего чата
 func (h *Handler) GetMessages(w http.ResponseWriter, r *http.Request) {
-    messages, err := h.service.GetMessages(50)
+    messages, err := h.service.GetGeneralMessages(50)
     if err != nil {
         http.Error(w, "Failed to fetch messages", http.StatusInternalServerError)
         return
     }
     w.Header().Set("Content-Type", "application/json")
-
     json.NewEncoder(w).Encode(messages)
 }
 
-// /ws — WebSocket endpoint
-var upgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+func (h *Handler) GetConversationMessages(w http.ResponseWriter, r *http.Request, otherEmail string) {
+    claims, ok := r.Context().Value("userClaims").(jwt.MapClaims)
+    if !ok {
+        http.Error(w, "Unauthorized", http.StatusUnauthorized)
+        return
+    }
+    currentUserID := fmt.Sprintf("%v", claims["user_id"])
+    if currentUserID == "" || currentUserID == "<nil>" {
+        http.Error(w, "Unauthorized", http.StatusUnauthorized)
+        return
+    }
+    messages, err := h.service.GetConversationMessages(currentUserID, otherEmail, 50)
+    if err != nil {
+        http.Error(w, "Failed to fetch conversation: "+err.Error(), http.StatusInternalServerError)
+        return
+    }
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(messages)
+}
+
+func (h *Handler) PostMessageWithAttachment(w http.ResponseWriter, r *http.Request) {
+    // 1. Проверка токена (см. Chat/PostMessage)
+    claims, ok := r.Context().Value("userClaims").(jwt.MapClaims)
+    if !ok { http.Error(w, "Unauthorized", http.StatusUnauthorized); return }
+    userID := fmt.Sprintf("%v", claims["user_id"])
+    if userID == "" || userID == "<nil>" {
+        http.Error(w, "Unauthorized", http.StatusUnauthorized)
+        return
+    }
+
+    // 2. Разбор multipart формы
+    err := r.ParseMultipartForm(10 << 20) // 10MB макс.
+    if err != nil {
+        http.Error(w, "Could not parse multipart form", http.StatusBadRequest)
+        return
+    }
+
+    // 3. Получи обязательные текстовые поля
+    content := r.FormValue("content")
+    if content == "" {
+        http.Error(w, "Content is required", http.StatusBadRequest)
+        return
+    }
+    // 4. Получи файл
+    file, handler, err := r.FormFile("file")
+    if err != nil {
+        http.Error(w, "File is required", http.StatusBadRequest)
+        return
+    }
+    defer file.Close()
+
+    // 5. Сохрани файл на диск (например, storage/{новоеимя})
+    filePath := fmt.Sprintf("storage/%d_%s", time.Now().UnixNano(), handler.Filename)
+    out, err := os.Create(filePath)
+    if err != nil { http.Error(w, "Could not save file", http.StatusInternalServerError); return }
+    defer out.Close()
+    _, err = io.Copy(out, file)
+    if err != nil { http.Error(w, "Could not save file", http.StatusInternalServerError); return }
+
+    // 6. Сохрани message как обычно
+    messageID := uuid.NewString() // или получи из insert
+    if err := h.service.SaveMessageWithID(messageID, userID, nil, content); err != nil {
+        http.Error(w, "Failed to save message", http.StatusInternalServerError)
+        return
+    }
+
+    // 7. Сохрани attachment
+    if err := h.service.SaveAttachment(messageID, userID, filePath, handler.Filename, handler.Header.Get("Content-Type")); err != nil {
+        http.Error(w, "Failed to save attachment", http.StatusInternalServerError)
+        return
+    }
+    w.WriteHeader(http.StatusCreated)
+    json.NewEncoder(w).Encode(map[string]string{"message_id": messageID})
+}
+
+// WebSocket для онлайн-чата
+var upgrader = websocket.Upgrader{
+    CheckOrigin: func(r *http.Request) bool { return true },
+}
 
 func (h *Handler) WebSocket(w http.ResponseWriter, r *http.Request) {
     claims, ok := r.Context().Value("userClaims").(jwt.MapClaims)
@@ -89,9 +184,8 @@ func (h *Handler) WebSocket(w http.ResponseWriter, r *http.Request) {
         if err != nil {
             return
         }
-        // Сохрани в базу
-        h.service.SaveMessage(userID, msg.Content)
-        // Рассылаем всем подключённым
+        // Сохраняется только как публичное (recipient = nil)
+        _ = h.service.SaveMessage(userID, nil, msg.Content)
         for _, c := range h.clients {
             c.WriteJSON(map[string]interface{}{
                 "user_id":    userID,
