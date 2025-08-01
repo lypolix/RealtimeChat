@@ -17,7 +17,7 @@ func NewService(db *shared.DB) *Service {
     return &Service{db: db}
 }
 
-// GetGeneralMessages возвращает все публичные сообщения (где recipient_user_id IS NULL) с вложением, если есть
+// GetGeneralMessages возвращает все публичные сообщения (recipient_user_id IS NULL) с вложением, если есть
 func (s *Service) GetGeneralMessages(limit int) ([]models.MessageWithAttachment, error) {
     ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
     defer cancel()
@@ -67,7 +67,7 @@ func (s *Service) GetGeneralMessages(limit int) ([]models.MessageWithAttachment,
     return messages, nil
 }
 
-// GetConversationMessages возвращает все приватные сообщения между двумя пользователями (с вложением, если есть)
+// GetConversationMessages — личка между двумя пользователями (в обе стороны), с вложениями (если есть)
 func (s *Service) GetConversationMessages(currentUserID, otherUsername string, limit int) ([]models.MessageWithAttachment, error) {
     ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
     defer cancel()
@@ -128,7 +128,7 @@ func (s *Service) GetConversationMessages(currentUserID, otherUsername string, l
     return messages, nil
 }
 
-// SaveMessage сохраняет сообщение (публичное или приватное)
+// SaveMessage — сохраняет сообщение (публичное или приватное)
 func (s *Service) SaveMessage(userID string, recipientUserID *string, content string) error {
     ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
     defer cancel()
@@ -140,7 +140,7 @@ func (s *Service) SaveMessage(userID string, recipientUserID *string, content st
     return err
 }
 
-// SaveAttachment сохраняет запись о файле (привязка к сообщению)
+// SaveAttachment — сохраняет запись о файле (привязка к сообщению)
 func (s *Service) SaveAttachment(messageID, userID, filePath, fileName, mimeType string) error {
     ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
     defer cancel()
@@ -152,7 +152,7 @@ func (s *Service) SaveAttachment(messageID, userID, filePath, fileName, mimeType
     return err
 }
 
-// SaveMessageWithID нужен для сообщений с заданным message_id (например, с вложением)
+// SaveMessageWithID — сохраняет сообщение с заданным message_id (для вложения), c поддержкой recipientUserID
 func (s *Service) SaveMessageWithID(messageID, userID string, recipientUserID *string, content string) error {
     ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
     defer cancel()

@@ -3,6 +3,7 @@ package chat
 import (
     "encoding/json"
     "fmt"
+    "log"
     "net/http"
     "time"
     "github.com/gorilla/websocket"
@@ -10,7 +11,6 @@ import (
     "io"
     "os"
     "github.com/google/uuid"
-    "log"
 )
 
 type Handler struct {
@@ -44,13 +44,14 @@ func (h *Handler) PostMessage(w http.ResponseWriter, r *http.Request) {
 
     var req struct {
         Content   string  `json:"content"`
-        Recipient *string `json:"recipient"`
+        Recipient *string `json:"recipient"` // почта получателя (если приватно)
     }
     if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
         http.Error(w, "Invalid request body", http.StatusBadRequest)
         return
     }
-    var recipientUserID *string = nil
+
+    var recipientUserID *string
     if req.Recipient != nil && *req.Recipient != "" {
         var id string
         err := h.service.db.QueryRowContext(
@@ -63,7 +64,10 @@ func (h *Handler) PostMessage(w http.ResponseWriter, r *http.Request) {
             return
         }
         recipientUserID = &id
+    } else {
+        recipientUserID = nil // публичный чат
     }
+
     if err := h.service.SaveMessage(userID, recipientUserID, req.Content); err != nil {
         log.Printf("Failed to save message: %v", err)
         http.Error(w, "Failed to save message", http.StatusInternalServerError)
@@ -114,7 +118,7 @@ func (h *Handler) GetConversationMessages(w http.ResponseWriter, r *http.Request
     json.NewEncoder(w).Encode(messages)
 }
 
-// POST /messages/attachment — сообщение с файлом (можно без текста)
+// POST /messages/attachment — отправка вложения (в т.ч. личного!)
 func (h *Handler) PostMessageWithAttachment(w http.ResponseWriter, r *http.Request) {
     if r.Method != http.MethodPost {
         http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -137,9 +141,26 @@ func (h *Handler) PostMessageWithAttachment(w http.ResponseWriter, r *http.Reque
         return
     }
 
-    content := r.FormValue("content") // теперь может быть пустым или отсутствовать!
-    // НЕ делаем проверку на присутствие контента:
-    // if content == "" { ... } — этого больше нет!
+    content := r.FormValue("content") // Может быть пустым для отправки только фото
+
+    // Новый блок: обработка recipient (личное фото)
+    var recipientUserID *string
+    recipient := r.FormValue("recipient")
+    if recipient != "" {
+        var id string
+        err := h.service.db.QueryRowContext(
+            r.Context(),
+            `SELECT id FROM users WHERE email = $1`,
+            recipient,
+        ).Scan(&id)
+        if err != nil {
+            http.Error(w, "Recipient user not found", http.StatusBadRequest)
+            return
+        }
+        recipientUserID = &id
+    } else {
+        recipientUserID = nil // публичное фото/сообщение
+    }
 
     // файл обязателен!
     file, handler, err := r.FormFile("file")
@@ -164,7 +185,7 @@ func (h *Handler) PostMessageWithAttachment(w http.ResponseWriter, r *http.Reque
     }
 
     messageID := uuid.NewString()
-    if err := h.service.SaveMessageWithID(messageID, userID, nil, content); err != nil {
+    if err := h.service.SaveMessageWithID(messageID, userID, recipientUserID, content); err != nil {
         log.Printf("Failed to save message: %v", err)
         http.Error(w, "Failed to save message", http.StatusInternalServerError)
         return
@@ -205,15 +226,31 @@ func (h *Handler) WebSocket(w http.ResponseWriter, r *http.Request) {
         conn.Close()
     }()
     for {
-        var msg struct{ Content string }
+        var msg struct {
+            Content   string  `json:"content"`
+            Recipient *string `json:"recipient"`
+        }
         err := conn.ReadJSON(&msg)
         if err != nil {
             return
         }
-        _ = h.service.SaveMessage(userID, nil, msg.Content)
+        var recipientUserID *string
+        if msg.Recipient != nil && *msg.Recipient != "" {
+            var id string
+            err := h.service.db.QueryRowContext(
+                r.Context(),
+                `SELECT id FROM users WHERE email = $1`,
+                *msg.Recipient,
+            ).Scan(&id)
+            if err == nil {
+                recipientUserID = &id
+            }
+        }
+        _ = h.service.SaveMessage(userID, recipientUserID, msg.Content)
         for _, c := range h.clients {
             c.WriteJSON(map[string]interface{}{
                 "user_id":    userID,
+                "recipient_user_id": recipientUserID,
                 "content":    msg.Content,
                 "created_at": time.Now(),
             })
