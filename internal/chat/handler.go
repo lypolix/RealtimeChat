@@ -10,6 +10,7 @@ import (
     "io"
     "os"
     "github.com/google/uuid"
+    "log"
 )
 
 type Handler struct {
@@ -24,8 +25,12 @@ func NewHandler(service *Service) *Handler {
     }
 }
 
-// Отправка сообщения в общий чат
+// POST /messages — Отправить (публичное или приватное)
 func (h *Handler) PostMessage(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodPost {
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+        return
+    }
     claims, ok := r.Context().Value("userClaims").(jwt.MapClaims)
     if !ok {
         http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -60,16 +65,22 @@ func (h *Handler) PostMessage(w http.ResponseWriter, r *http.Request) {
         recipientUserID = &id
     }
     if err := h.service.SaveMessage(userID, recipientUserID, req.Content); err != nil {
+        log.Printf("Failed to save message: %v", err)
         http.Error(w, "Failed to save message", http.StatusInternalServerError)
         return
     }
     w.WriteHeader(http.StatusCreated)
 }
 
-// Получение истории сообщений общего чата
+// GET /messages — История публичного чата (+ attachment если есть)
 func (h *Handler) GetMessages(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodGet {
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+        return
+    }
     messages, err := h.service.GetGeneralMessages(50)
     if err != nil {
+        log.Printf("Failed to fetch messages: %v", err)
         http.Error(w, "Failed to fetch messages", http.StatusInternalServerError)
         return
     }
@@ -77,7 +88,12 @@ func (h *Handler) GetMessages(w http.ResponseWriter, r *http.Request) {
     json.NewEncoder(w).Encode(messages)
 }
 
+// GET /messages/{email} — Личная переписка (+ attachment если есть)
 func (h *Handler) GetConversationMessages(w http.ResponseWriter, r *http.Request, otherEmail string) {
+    if r.Method != http.MethodGet {
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+        return
+    }
     claims, ok := r.Context().Value("userClaims").(jwt.MapClaims)
     if !ok {
         http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -90,6 +106,7 @@ func (h *Handler) GetConversationMessages(w http.ResponseWriter, r *http.Request
     }
     messages, err := h.service.GetConversationMessages(currentUserID, otherEmail, 50)
     if err != nil {
+        log.Printf("Failed to fetch conversation: %v", err)
         http.Error(w, "Failed to fetch conversation: "+err.Error(), http.StatusInternalServerError)
         return
     }
@@ -97,30 +114,34 @@ func (h *Handler) GetConversationMessages(w http.ResponseWriter, r *http.Request
     json.NewEncoder(w).Encode(messages)
 }
 
+// POST /messages/attachment — сообщение с файлом (можно без текста)
 func (h *Handler) PostMessageWithAttachment(w http.ResponseWriter, r *http.Request) {
-    // 1. Проверка токена (см. Chat/PostMessage)
+    if r.Method != http.MethodPost {
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+        return
+    }
     claims, ok := r.Context().Value("userClaims").(jwt.MapClaims)
-    if !ok { http.Error(w, "Unauthorized", http.StatusUnauthorized); return }
+    if !ok {
+        http.Error(w, "Unauthorized", http.StatusUnauthorized)
+        return
+    }
     userID := fmt.Sprintf("%v", claims["user_id"])
     if userID == "" || userID == "<nil>" {
         http.Error(w, "Unauthorized", http.StatusUnauthorized)
         return
     }
 
-    // 2. Разбор multipart формы
-    err := r.ParseMultipartForm(10 << 20) // 10MB макс.
+    err := r.ParseMultipartForm(10 << 20)
     if err != nil {
         http.Error(w, "Could not parse multipart form", http.StatusBadRequest)
         return
     }
 
-    // 3. Получи обязательные текстовые поля
-    content := r.FormValue("content")
-    if content == "" {
-        http.Error(w, "Content is required", http.StatusBadRequest)
-        return
-    }
-    // 4. Получи файл
+    content := r.FormValue("content") // теперь может быть пустым или отсутствовать!
+    // НЕ делаем проверку на присутствие контента:
+    // if content == "" { ... } — этого больше нет!
+
+    // файл обязателен!
     file, handler, err := r.FormFile("file")
     if err != nil {
         http.Error(w, "File is required", http.StatusBadRequest)
@@ -128,23 +149,29 @@ func (h *Handler) PostMessageWithAttachment(w http.ResponseWriter, r *http.Reque
     }
     defer file.Close()
 
-    // 5. Сохрани файл на диск (например, storage/{новоеимя})
     filePath := fmt.Sprintf("storage/%d_%s", time.Now().UnixNano(), handler.Filename)
     out, err := os.Create(filePath)
-    if err != nil { http.Error(w, "Could not save file", http.StatusInternalServerError); return }
+    if err != nil {
+        log.Printf("Failed to save file: %v", err)
+        http.Error(w, "Could not save file", http.StatusInternalServerError)
+        return
+    }
     defer out.Close()
-    _, err = io.Copy(out, file)
-    if err != nil { http.Error(w, "Could not save file", http.StatusInternalServerError); return }
+    if _, err = io.Copy(out, file); err != nil {
+        log.Printf("Failed to save file: %v", err)
+        http.Error(w, "Could not save file", http.StatusInternalServerError)
+        return
+    }
 
-    // 6. Сохрани message как обычно
-    messageID := uuid.NewString() // или получи из insert
+    messageID := uuid.NewString()
     if err := h.service.SaveMessageWithID(messageID, userID, nil, content); err != nil {
+        log.Printf("Failed to save message: %v", err)
         http.Error(w, "Failed to save message", http.StatusInternalServerError)
         return
     }
 
-    // 7. Сохрани attachment
     if err := h.service.SaveAttachment(messageID, userID, filePath, handler.Filename, handler.Header.Get("Content-Type")); err != nil {
+        log.Printf("Failed to save attachment: %v", err)
         http.Error(w, "Failed to save attachment", http.StatusInternalServerError)
         return
     }
@@ -152,7 +179,6 @@ func (h *Handler) PostMessageWithAttachment(w http.ResponseWriter, r *http.Reque
     json.NewEncoder(w).Encode(map[string]string{"message_id": messageID})
 }
 
-// WebSocket для онлайн-чата
 var upgrader = websocket.Upgrader{
     CheckOrigin: func(r *http.Request) bool { return true },
 }
@@ -184,7 +210,6 @@ func (h *Handler) WebSocket(w http.ResponseWriter, r *http.Request) {
         if err != nil {
             return
         }
-        // Сохраняется только как публичное (recipient = nil)
         _ = h.service.SaveMessage(userID, nil, msg.Content)
         for _, c := range h.clients {
             c.WriteJSON(map[string]interface{}{

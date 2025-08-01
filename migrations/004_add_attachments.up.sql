@@ -11,7 +11,6 @@ CREATE TABLE IF NOT EXISTS attachments
     created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-
 -- Индекс для ускорения поиска по сообщению
 CREATE INDEX IF NOT EXISTS idx_attachments_message_id ON attachments (message_id);
 

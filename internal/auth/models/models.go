@@ -59,3 +59,19 @@ type Attachment struct {
     MimeType  string    `json:"mime_type" db:"mime_type"`
     CreatedAt time.Time `json:"created_at" db:"created_at"`
 }
+
+
+type AttachmentInfo struct {
+    FileName string `json:"file_name"`
+    FilePath string `json:"file_path"`
+    MimeType string `json:"mime_type"`
+}
+
+type MessageWithAttachment struct {
+    ID              string           `json:"id"`
+    UserID          string           `json:"user_id"`
+    RecipientUserID *string          `json:"recipient_user_id,omitempty"`
+    Content         string           `json:"content"`
+    CreatedAt       time.Time        `json:"created_at"`
+    Attachment      *AttachmentInfo  `json:"attachment,omitempty"`
+}

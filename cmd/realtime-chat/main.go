@@ -3,16 +3,14 @@ package main
 import (
     "log"
     "net/http"
-
+    "strings"
     "RealtimeChat/internal/auth"
     "RealtimeChat/internal/chat"
     "RealtimeChat/internal/config"
     "RealtimeChat/internal/shared"
-    "strings"
 )
 
 func main() {
-
     // Загрузка конфигурации
     cfg := config.MustLoad()
 
@@ -43,7 +41,27 @@ func main() {
         w.Write([]byte("Protected area"))
     })))
 
-    // REST обработка сообщений (POST и GET на одном маршруте, JWT обязателен)
+    // Точный маршрут для вложений
+    http.Handle("/messages/attachment", shared.JWTMiddleware(http.HandlerFunc(chatHandler.PostMessageWithAttachment)))
+
+    // Точный маршрут для диалога по email (после /messages/)
+    http.Handle("/messages/", shared.JWTMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        if r.Method != http.MethodGet {
+            http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+            return
+        }
+        // /messages/{email}
+        path := r.URL.Path
+        prefix := "/messages/"
+        if !strings.HasPrefix(path, prefix) || len(path) <= len(prefix) {
+            http.Error(w, "Email required", http.StatusBadRequest)
+            return
+        }
+        email := path[len(prefix):]
+        chatHandler.GetConversationMessages(w, r, email)
+    })))
+
+    // Основной чат: POST (создать), GET (получить список)
     http.Handle("/messages", shared.JWTMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         switch r.Method {
         case http.MethodPost:
@@ -55,29 +73,9 @@ func main() {
         }
     })))
 
-    http.Handle("/messages/", shared.JWTMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        // Только GET! (POST сюда не попадёт)
-        if r.Method != http.MethodGet {
-            http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-            return
-        }
-        // Парсим email из пути
-        path := r.URL.Path
-        prefix := "/messages/"
-        if !strings.HasPrefix(path, prefix) || len(path) <= len(prefix) {
-            http.Error(w, "Email required", http.StatusBadRequest)
-            return
-        }
-        email := path[len(prefix):]
-        chatHandler.GetConversationMessages(w, r, email)
-    })))
-
-    http.Handle("/messages/attachment", shared.JWTMiddleware(http.HandlerFunc(chatHandler.PostMessageWithAttachment)))
-
-    // WebSocket эндпоинт (JWT обязателен)
+    // WebSocket
     http.Handle("/ws", shared.JWTMiddleware(http.HandlerFunc(chatHandler.WebSocket)))
 
-    // Запуск HTTP-сервера
     log.Printf("Server starting on :%s", cfg.Server.Port)
     log.Fatal(http.ListenAndServe(":"+cfg.Server.Port, nil))
 }
