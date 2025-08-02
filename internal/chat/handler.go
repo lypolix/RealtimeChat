@@ -5,6 +5,7 @@ import (
     "fmt"
     "log"
     "net/http"
+    "sync"
     "time"
     "github.com/gorilla/websocket"
     "github.com/golang-jwt/jwt/v5"
@@ -15,7 +16,9 @@ import (
 
 type Handler struct {
     service *Service
-    clients map[string]*websocket.Conn
+
+    clients   map[string]*websocket.Conn // userID → conn
+    clientsMu sync.RWMutex               // для потокобезопасности
 }
 
 func NewHandler(service *Service) *Handler {
@@ -25,7 +28,55 @@ func NewHandler(service *Service) *Handler {
     }
 }
 
-// POST /messages — Отправить (публичное или приватное)
+// --- Вспомогательные методы работы с клиентами ---
+
+// addClient: одно соединение на user, старое закрывается
+func (h *Handler) addClient(userID string, conn *websocket.Conn) {
+    h.clientsMu.Lock()
+    defer h.clientsMu.Unlock()
+    if old, exists := h.clients[userID]; exists && old != nil {
+        log.Printf("Closing previous WS connection for user %s", userID)
+        old.Close()
+    }
+    h.clients[userID] = conn
+}
+
+// removeClient: удаляет WS-соединение пользователя
+func (h *Handler) removeClient(userID string) {
+    h.clientsMu.Lock()
+    defer h.clientsMu.Unlock()
+    if _, exists := h.clients[userID]; exists {
+        delete(h.clients, userID)
+    }
+}
+
+// sendBroadcast: публичный broadcast всем WS-подключенным
+func (h *Handler) sendBroadcast(msg map[string]interface{}) {
+    h.clientsMu.RLock()
+    defer h.clientsMu.RUnlock()
+    for userID, conn := range h.clients {
+        if err := conn.WriteJSON(msg); err != nil {
+            log.Printf("Broadcast: failed for %s: %v", userID, err)
+        }
+    }
+}
+
+// sendToUsers: отправка приватного WS-сообщения двум ID (отправителю и получателю)
+func (h *Handler) sendToUsers(userIDs []string, msg map[string]interface{}) {
+    h.clientsMu.RLock()
+    defer h.clientsMu.RUnlock()
+    for _, userID := range userIDs {
+        if conn, ok := h.clients[userID]; ok && conn != nil {
+            if err := conn.WriteJSON(msg); err != nil {
+                log.Printf("PrivateWS: failed for %s: %v", userID, err)
+            }
+        }
+    }
+}
+
+// --- Handlers ---
+
+// POST /messages (публичное или приватное текстовое)
 func (h *Handler) PostMessage(w http.ResponseWriter, r *http.Request) {
     if r.Method != http.MethodPost {
         http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -44,7 +95,7 @@ func (h *Handler) PostMessage(w http.ResponseWriter, r *http.Request) {
 
     var req struct {
         Content   string  `json:"content"`
-        Recipient *string `json:"recipient"` // почта получателя (если приватно)
+        Recipient *string `json:"recipient"` // email
     }
     if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
         http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -64,8 +115,6 @@ func (h *Handler) PostMessage(w http.ResponseWriter, r *http.Request) {
             return
         }
         recipientUserID = &id
-    } else {
-        recipientUserID = nil // публичный чат
     }
 
     if err := h.service.SaveMessage(userID, recipientUserID, req.Content); err != nil {
@@ -73,10 +122,22 @@ func (h *Handler) PostMessage(w http.ResponseWriter, r *http.Request) {
         http.Error(w, "Failed to save message", http.StatusInternalServerError)
         return
     }
+    // После сохранения — рассылаем по WS
+    msgPayload := map[string]interface{}{
+        "user_id":           userID,
+        "recipient_user_id": recipientUserID,
+        "content":           req.Content,
+        "created_at":        time.Now(),
+    }
+    if recipientUserID == nil {
+        h.sendBroadcast(msgPayload) // всем
+    } else {
+        h.sendToUsers([]string{userID, *recipientUserID}, msgPayload)
+    }
     w.WriteHeader(http.StatusCreated)
 }
 
-// GET /messages — История публичного чата (+ attachment если есть)
+// GET /messages (история публичного чата)
 func (h *Handler) GetMessages(w http.ResponseWriter, r *http.Request) {
     if r.Method != http.MethodGet {
         http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -92,7 +153,7 @@ func (h *Handler) GetMessages(w http.ResponseWriter, r *http.Request) {
     json.NewEncoder(w).Encode(messages)
 }
 
-// GET /messages/{email} — Личная переписка (+ attachment если есть)
+// GET /messages/{email} (история личной переписки)
 func (h *Handler) GetConversationMessages(w http.ResponseWriter, r *http.Request, otherEmail string) {
     if r.Method != http.MethodGet {
         http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -118,7 +179,7 @@ func (h *Handler) GetConversationMessages(w http.ResponseWriter, r *http.Request
     json.NewEncoder(w).Encode(messages)
 }
 
-// POST /messages/attachment — отправка вложения (в т.ч. личного!)
+// POST /messages/attachment — сообщение с вложением (можно лично, можно публично)
 func (h *Handler) PostMessageWithAttachment(w http.ResponseWriter, r *http.Request) {
     if r.Method != http.MethodPost {
         http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -141,9 +202,8 @@ func (h *Handler) PostMessageWithAttachment(w http.ResponseWriter, r *http.Reque
         return
     }
 
-    content := r.FormValue("content") // Может быть пустым для отправки только фото
+    content := r.FormValue("content") // Может быть пустым
 
-    // Новый блок: обработка recipient (личное фото)
     var recipientUserID *string
     recipient := r.FormValue("recipient")
     if recipient != "" {
@@ -158,11 +218,8 @@ func (h *Handler) PostMessageWithAttachment(w http.ResponseWriter, r *http.Reque
             return
         }
         recipientUserID = &id
-    } else {
-        recipientUserID = nil // публичное фото/сообщение
     }
 
-    // файл обязателен!
     file, handler, err := r.FormFile("file")
     if err != nil {
         http.Error(w, "File is required", http.StatusBadRequest)
@@ -190,16 +247,34 @@ func (h *Handler) PostMessageWithAttachment(w http.ResponseWriter, r *http.Reque
         http.Error(w, "Failed to save message", http.StatusInternalServerError)
         return
     }
-
     if err := h.service.SaveAttachment(messageID, userID, filePath, handler.Filename, handler.Header.Get("Content-Type")); err != nil {
         log.Printf("Failed to save attachment: %v", err)
         http.Error(w, "Failed to save attachment", http.StatusInternalServerError)
         return
     }
+
+    msgPayload := map[string]interface{}{
+        "user_id":           userID,
+        "recipient_user_id": recipientUserID,
+        "attachment": map[string]string{
+            "file_name": handler.Filename,
+            "file_path": filePath,
+            "mime_type": handler.Header.Get("Content-Type"),
+        },
+        "content":    content,
+        "created_at": time.Now(),
+    }
+    if recipientUserID == nil {
+        h.sendBroadcast(msgPayload)
+    } else {
+        h.sendToUsers([]string{userID, *recipientUserID}, msgPayload)
+    }
+
     w.WriteHeader(http.StatusCreated)
     json.NewEncoder(w).Encode(map[string]string{"message_id": messageID})
 }
 
+// --- WebSocket endpoint с потокобезопасным хранением клиентов ---
 var upgrader = websocket.Upgrader{
     CheckOrigin: func(r *http.Request) bool { return true },
 }
@@ -220,9 +295,9 @@ func (h *Handler) WebSocket(w http.ResponseWriter, r *http.Request) {
         http.Error(w, "Failed to upgrade connection", http.StatusInternalServerError)
         return
     }
-    h.clients[userID] = conn
+    h.addClient(userID, conn)
     defer func() {
-        delete(h.clients, userID)
+        h.removeClient(userID)
         conn.Close()
     }()
     for {
@@ -246,14 +321,37 @@ func (h *Handler) WebSocket(w http.ResponseWriter, r *http.Request) {
                 recipientUserID = &id
             }
         }
-        _ = h.service.SaveMessage(userID, recipientUserID, msg.Content)
-        for _, c := range h.clients {
-            c.WriteJSON(map[string]interface{}{
-                "user_id":    userID,
-                "recipient_user_id": recipientUserID,
-                "content":    msg.Content,
-                "created_at": time.Now(),
-            })
+        // Сохрани в базу
+        if err := h.service.SaveMessage(userID, recipientUserID, msg.Content); err != nil {
+            log.Printf("WebSocket: failed to save message: %v", err)
+            continue
+        }
+        payload := map[string]interface{}{
+            "user_id":           userID,
+            "recipient_user_id": recipientUserID,
+            "content":           msg.Content,
+            "created_at":        time.Now(),
+        }
+        if recipientUserID == nil {
+            h.sendBroadcast(payload)
+        } else {
+            h.sendToUsers([]string{userID, *recipientUserID}, payload)
         }
     }
+}
+
+func (h *Handler) GetUserChats(w http.ResponseWriter, r *http.Request) {
+    claims, ok := r.Context().Value("userClaims").(jwt.MapClaims)
+    if !ok {
+        http.Error(w, "Unauthorized", http.StatusUnauthorized)
+        return
+    }
+    userID := fmt.Sprintf("%v", claims["user_id"])
+    chats, err := h.service.GetUserChats(userID, 100)
+    if err != nil {
+        http.Error(w, "Failed to fetch chats", http.StatusInternalServerError)
+        return
+    }
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(chats)
 }

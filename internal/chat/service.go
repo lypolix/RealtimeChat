@@ -3,21 +3,81 @@ package chat
 import (
     "context"
     "log"
+    "sync"
     "time"
 
     "RealtimeChat/internal/shared"
     "RealtimeChat/internal/auth/models"
+    "github.com/gorilla/websocket"
 )
 
 type Service struct {
-    db *shared.DB
+    db      *shared.DB
+    clients map[string]*websocket.Conn // map userID → conn
+    mu      sync.RWMutex               // для безопасного доступа к clients
 }
 
 func NewService(db *shared.DB) *Service {
-    return &Service{db: db}
+    return &Service{
+        db:      db,
+        clients: make(map[string]*websocket.Conn),
+    }
 }
 
-// GetGeneralMessages возвращает все публичные сообщения (recipient_user_id IS NULL) с вложением, если есть
+// --- WebSocket Client Management ---
+
+// AddClient: добавление соединения пользователя, гарантирует одно соединение на user
+func (s *Service) AddClient(userID string, conn *websocket.Conn) {
+    s.mu.Lock()
+    defer s.mu.Unlock()
+    // если уже есть соединение, закрыть
+    if old, exists := s.clients[userID]; exists && old != nil {
+        log.Printf("WebSocket: closing old conn for user %s", userID)
+        old.Close()
+    }
+    s.clients[userID] = conn
+    log.Printf("WebSocket: connected user %s, total: %d", userID, len(s.clients))
+}
+
+// RemoveClient: удаляет соединение пользователя из map
+func (s *Service) RemoveClient(userID string) {
+    s.mu.Lock()
+    defer s.mu.Unlock()
+    if _, ok := s.clients[userID]; ok {
+        delete(s.clients, userID)
+        log.Printf("WebSocket: removed user %s, total: %d", userID, len(s.clients))
+    }
+}
+
+// BroadcastMessage: рассылает WS-сообщение всем или только адресату
+func (s *Service) BroadcastMessage(senderID string, recipientUserID *string, payload map[string]interface{}) {
+    s.mu.RLock()
+    defer s.mu.RUnlock()
+
+    if recipientUserID == nil {
+        // Публичное сообщение — разослать всем
+        for userID, conn := range s.clients {
+            if err := conn.WriteJSON(payload); err != nil {
+                log.Printf("BroadcastMessage: failed for %s: %v", userID, err)
+                // (В идеале нужно чистить мёртвые соединения)
+            }
+        }
+    } else {
+        // Личное сообщение: только двоим (отправителю и получателю)
+        sendTo := []string{senderID, *recipientUserID}
+        for _, userID := range sendTo {
+            if conn, ok := s.clients[userID]; ok && conn != nil {
+                if err := conn.WriteJSON(payload); err != nil {
+                    log.Printf("BroadcastMessage: failed for %s: %v", userID, err)
+                }
+            }
+        }
+    }
+}
+
+// --- Messages with attachments (немного ниже всё то, что было у тебя) ---
+
+// GetGeneralMessages возвращает публичные сообщения (recipient_user_id IS NULL) с вложением (если есть)
 func (s *Service) GetGeneralMessages(limit int) ([]models.MessageWithAttachment, error) {
     ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
     defer cancel()
@@ -67,12 +127,11 @@ func (s *Service) GetGeneralMessages(limit int) ([]models.MessageWithAttachment,
     return messages, nil
 }
 
-// GetConversationMessages — личка между двумя пользователями (в обе стороны), с вложениями (если есть)
+// GetConversationMessages — личка между двумя пользователями (в обе стороны), с вложениями
 func (s *Service) GetConversationMessages(currentUserID, otherUsername string, limit int) ([]models.MessageWithAttachment, error) {
     ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
     defer cancel()
 
-    // Получаем id другого пользователя по email
     var otherUserID string
     err := s.db.QueryRowContext(ctx, `SELECT id FROM users WHERE email = $1`, otherUsername).Scan(&otherUserID)
     if err != nil {
@@ -162,4 +221,49 @@ func (s *Service) SaveMessageWithID(messageID, userID string, recipientUserID *s
         log.Printf("SaveMessageWithID: insert failed (messageID=%s userID=%s recipientUserID=%v content='%s'): %v", messageID, userID, recipientUserID, content, err)
     }
     return err
+}
+
+type ChatPreview struct {
+    UserID        string    `json:"user_id"`   // id собеседника
+    Email         string    `json:"email"`     // почта собеседника
+    LastMessage   string    `json:"last_message"`
+    LastTimestamp time.Time `json:"last_timestamp"`
+}
+
+func (s *Service) GetUserChats(currentUserID string, limit int) ([]ChatPreview, error) {
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+    query := `
+        SELECT u.id, u.email, COALESCE(m.content, ''), m.created_at
+        FROM (
+            SELECT DISTINCT 
+                CASE WHEN m.user_id = $1 THEN m.recipient_user_id ELSE m.user_id END as buddy_id
+            FROM messages m
+            WHERE (m.user_id = $1 AND m.recipient_user_id IS NOT NULL)
+               OR (m.recipient_user_id = $1)
+        ) dialogs
+        JOIN users u ON u.id = dialogs.buddy_id
+        JOIN LATERAL (
+            SELECT content, created_at 
+            FROM messages 
+            WHERE (user_id = $1 AND recipient_user_id = u.id)
+               OR (user_id = u.id AND recipient_user_id = $1)
+            ORDER BY created_at DESC LIMIT 1
+        ) m ON TRUE
+        LIMIT $2
+    `
+    rows, err := s.db.QueryContext(ctx, query, currentUserID, limit)
+    if err != nil {
+        return nil, err
+    }
+    defer rows.Close()
+    var res []ChatPreview
+    for rows.Next() {
+        var c ChatPreview
+        if err := rows.Scan(&c.UserID, &c.Email, &c.LastMessage, &c.LastTimestamp); err != nil {
+            return nil, err
+        }
+        res = append(res, c)
+    }
+    return res, nil
 }
