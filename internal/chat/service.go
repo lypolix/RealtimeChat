@@ -24,13 +24,10 @@ func NewService(db *shared.DB) *Service {
     }
 }
 
-// --- WebSocket Client Management ---
 
-// AddClient: добавление соединения пользователя, гарантирует одно соединение на user
 func (s *Service) AddClient(userID string, conn *websocket.Conn) {
     s.mu.Lock()
     defer s.mu.Unlock()
-    // если уже есть соединение, закрыть
     if old, exists := s.clients[userID]; exists && old != nil {
         log.Printf("WebSocket: closing old conn for user %s", userID)
         old.Close()
@@ -39,7 +36,6 @@ func (s *Service) AddClient(userID string, conn *websocket.Conn) {
     log.Printf("WebSocket: connected user %s, total: %d", userID, len(s.clients))
 }
 
-// RemoveClient: удаляет соединение пользователя из map
 func (s *Service) RemoveClient(userID string) {
     s.mu.Lock()
     defer s.mu.Unlock()
@@ -49,21 +45,16 @@ func (s *Service) RemoveClient(userID string) {
     }
 }
 
-// BroadcastMessage: рассылает WS-сообщение всем или только адресату
 func (s *Service) BroadcastMessage(senderID string, recipientUserID *string, payload map[string]interface{}) {
     s.mu.RLock()
     defer s.mu.RUnlock()
-
     if recipientUserID == nil {
-        // Публичное сообщение — разослать всем
         for userID, conn := range s.clients {
             if err := conn.WriteJSON(payload); err != nil {
                 log.Printf("BroadcastMessage: failed for %s: %v", userID, err)
-                // (В идеале нужно чистить мёртвые соединения)
             }
         }
     } else {
-        // Личное сообщение: только двоим (отправителю и получателю)
         sendTo := []string{senderID, *recipientUserID}
         for _, userID := range sendTo {
             if conn, ok := s.clients[userID]; ok && conn != nil {
@@ -75,9 +66,6 @@ func (s *Service) BroadcastMessage(senderID string, recipientUserID *string, pay
     }
 }
 
-// --- Messages with attachments (немного ниже всё то, что было у тебя) ---
-
-// GetGeneralMessages возвращает публичные сообщения (recipient_user_id IS NULL) с вложением (если есть)
 func (s *Service) GetGeneralMessages(limit int) ([]models.MessageWithAttachment, error) {
     ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
     defer cancel()
@@ -127,7 +115,6 @@ func (s *Service) GetGeneralMessages(limit int) ([]models.MessageWithAttachment,
     return messages, nil
 }
 
-// GetConversationMessages — личка между двумя пользователями (в обе стороны), с вложениями
 func (s *Service) GetConversationMessages(currentUserID, otherUsername string, limit int) ([]models.MessageWithAttachment, error) {
     ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
     defer cancel()
@@ -187,7 +174,6 @@ func (s *Service) GetConversationMessages(currentUserID, otherUsername string, l
     return messages, nil
 }
 
-// SaveMessage — сохраняет сообщение (публичное или приватное)
 func (s *Service) SaveMessage(userID string, recipientUserID *string, content string) error {
     ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
     defer cancel()
@@ -199,7 +185,6 @@ func (s *Service) SaveMessage(userID string, recipientUserID *string, content st
     return err
 }
 
-// SaveAttachment — сохраняет запись о файле (привязка к сообщению)
 func (s *Service) SaveAttachment(messageID, userID, filePath, fileName, mimeType string) error {
     ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
     defer cancel()
@@ -211,7 +196,6 @@ func (s *Service) SaveAttachment(messageID, userID, filePath, fileName, mimeType
     return err
 }
 
-// SaveMessageWithID — сохраняет сообщение с заданным message_id (для вложения), c поддержкой recipientUserID
 func (s *Service) SaveMessageWithID(messageID, userID string, recipientUserID *string, content string) error {
     ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
     defer cancel()
@@ -224,8 +208,8 @@ func (s *Service) SaveMessageWithID(messageID, userID string, recipientUserID *s
 }
 
 type ChatPreview struct {
-    UserID        string    `json:"user_id"`   // id собеседника
-    Email         string    `json:"email"`     // почта собеседника
+    UserID        string    `json:"user_id"`
+    Email         string    `json:"email"`
     LastMessage   string    `json:"last_message"`
     LastTimestamp time.Time `json:"last_timestamp"`
 }
@@ -250,6 +234,7 @@ func (s *Service) GetUserChats(currentUserID string, limit int) ([]ChatPreview, 
                OR (user_id = u.id AND recipient_user_id = $1)
             ORDER BY created_at DESC LIMIT 1
         ) m ON TRUE
+        ORDER BY m.created_at DESC         
         LIMIT $2
     `
     rows, err := s.db.QueryContext(ctx, query, currentUserID, limit)

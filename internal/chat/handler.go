@@ -321,7 +321,7 @@ func (h *Handler) WebSocket(w http.ResponseWriter, r *http.Request) {
                 recipientUserID = &id
             }
         }
-        // Сохрани в базу
+        
         if err := h.service.SaveMessage(userID, recipientUserID, msg.Content); err != nil {
             log.Printf("WebSocket: failed to save message: %v", err)
             continue
