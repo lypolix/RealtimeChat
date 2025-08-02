@@ -3,8 +3,8 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 CREATE TABLE IF NOT EXISTS attachments
 (
     id         SERIAL PRIMARY KEY,
-    message_id INTEGER REFERENCES messages (id) ON DELETE CASCADE,
-    user_id    INTEGER REFERENCES users (id) ON DELETE CASCADE,
+    message_id uuid REFERENCES messages (id) ON DELETE CASCADE,
+    user_id    uuid REFERENCES users (id) ON DELETE CASCADE,
     file_path  VARCHAR(255) NOT NULL,
     file_name  VARCHAR(255) NOT NULL,
     mime_type  VARCHAR(100) NOT NULL,
