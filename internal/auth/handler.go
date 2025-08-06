@@ -3,60 +3,81 @@ package auth
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 )
 
-// Credentials представляет структуру для входящих данных авторизации
+// swagger:model Credentials
 type Credentials struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
 }
 
-// AuthResponse представляет структуру ответа с токеном
+// swagger:model AuthResponse
 type AuthResponse struct {
 	Token string `json:"token"`
 }
 
-// Handler обрабатывает HTTP-запросы для аутентификации
 type Handler struct {
 	service *Service
 }
 
-// NewHandler создает новый экземпляр Handler
 func NewHandler(service *Service) *Handler {
 	return &Handler{
 		service: service,
 	}
 }
 
-// Login обрабатывает запрос на вход в систему
+// swagger:model User
+type User struct {
+    ID        string    `json:"id" example:"123e4567-e89b-12d3-a456-426614174000"`
+    Email     string    `json:"email" example:"user@example.com"`
+    CreatedAt time.Time `json:"created_at" example:"2023-07-22T14:12:00Z"`
+    UpdatedAt time.Time `json:"updated_at" example:"2023-07-25T18:34:00Z"`
+}
+
+
+// @Summary Вход пользователя
+// @Description Проверяет email/пароль и возвращает JWT токен
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param body body Credentials true "User credentials"
+// @Success 200 {object} AuthResponse
+// @Failure 401 {string} string "Invalid credentials"
+// @Router /login [post]
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
-	// Проверяем метод запроса
+	
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Декодируем тело запроса
 	var creds Credentials
 	if err := json.NewDecoder(r.Body).Decode(&creds); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	// Вызываем сервис для аутентификации
 	token, err := h.service.Login(creds.Email, creds.Password)
 	if err != nil {
 		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
 		return
 	}
 
-	// Формируем успешный ответ
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(AuthResponse{Token: token})
 }
 
-// Register обрабатывает запрос на создание нового пользователя
+// @Summary Регистрация пользователя
+// @Description Создаёт нового пользователя
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param body body Credentials true "User credentials"
+// @Success 201 {string} string "User created"
+// @Failure 400 {string} string "Invalid request body"
+// @Router /register [post]
 func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
     if r.Method != http.MethodPost {
         http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -67,7 +88,7 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
         http.Error(w, "Invalid request body", http.StatusBadRequest)
         return
     }
-    // Вызовем сервис регистрации
+
     err := h.service.Register(req.Email, req.Password)
     if err != nil {
         http.Error(w, err.Error(), http.StatusBadRequest)

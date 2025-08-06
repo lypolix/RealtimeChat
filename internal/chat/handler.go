@@ -17,8 +17,8 @@ import (
 type Handler struct {
     service *Service
 
-    clients   map[string]*websocket.Conn // userID → conn
-    clientsMu sync.RWMutex               // для потокобезопасности
+    clients   map[string]*websocket.Conn 
+    clientsMu sync.RWMutex               
 }
 
 func NewHandler(service *Service) *Handler {
@@ -28,9 +28,6 @@ func NewHandler(service *Service) *Handler {
     }
 }
 
-// --- Вспомогательные методы работы с клиентами ---
-
-// addClient: одно соединение на user, старое закрывается
 func (h *Handler) addClient(userID string, conn *websocket.Conn) {
     h.clientsMu.Lock()
     defer h.clientsMu.Unlock()
@@ -41,7 +38,6 @@ func (h *Handler) addClient(userID string, conn *websocket.Conn) {
     h.clients[userID] = conn
 }
 
-// removeClient: удаляет WS-соединение пользователя
 func (h *Handler) removeClient(userID string) {
     h.clientsMu.Lock()
     defer h.clientsMu.Unlock()
@@ -50,7 +46,6 @@ func (h *Handler) removeClient(userID string) {
     }
 }
 
-// sendBroadcast: публичный broadcast всем WS-подключенным
 func (h *Handler) sendBroadcast(msg map[string]interface{}) {
     h.clientsMu.RLock()
     defer h.clientsMu.RUnlock()
@@ -61,7 +56,6 @@ func (h *Handler) sendBroadcast(msg map[string]interface{}) {
     }
 }
 
-// sendToUsers: отправка приватного WS-сообщения двум ID (отправителю и получателю)
 func (h *Handler) sendToUsers(userIDs []string, msg map[string]interface{}) {
     h.clientsMu.RLock()
     defer h.clientsMu.RUnlock()
@@ -74,9 +68,16 @@ func (h *Handler) sendToUsers(userIDs []string, msg map[string]interface{}) {
     }
 }
 
-// --- Handlers ---
-
-// POST /messages (публичное или приватное текстовое)
+// @Summary Отправить сообщение (публичное/личное)
+// @Description Создаёт новое сообщение
+// @Tags message
+// @Accept json
+// @Produce json
+// @Param body body models.MessagePayload true "Message payload"
+// @Success 201
+// @Failure 400 {string} string "Invalid request"
+// @Failure 401 {string} string "Unauthorized"
+// @Router /messages [post]
 func (h *Handler) PostMessage(w http.ResponseWriter, r *http.Request) {
     if r.Method != http.MethodPost {
         http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -95,7 +96,7 @@ func (h *Handler) PostMessage(w http.ResponseWriter, r *http.Request) {
 
     var req struct {
         Content   string  `json:"content"`
-        Recipient *string `json:"recipient"` // email
+        Recipient *string `json:"recipient"` 
     }
     if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
         http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -122,7 +123,7 @@ func (h *Handler) PostMessage(w http.ResponseWriter, r *http.Request) {
         http.Error(w, "Failed to save message", http.StatusInternalServerError)
         return
     }
-    // После сохранения — рассылаем по WS
+
     msgPayload := map[string]interface{}{
         "user_id":           userID,
         "recipient_user_id": recipientUserID,
@@ -130,14 +131,20 @@ func (h *Handler) PostMessage(w http.ResponseWriter, r *http.Request) {
         "created_at":        time.Now(),
     }
     if recipientUserID == nil {
-        h.sendBroadcast(msgPayload) // всем
+        h.sendBroadcast(msgPayload) 
     } else {
         h.sendToUsers([]string{userID, *recipientUserID}, msgPayload)
     }
     w.WriteHeader(http.StatusCreated)
 }
 
-// GET /messages (история публичного чата)
+// @Summary Получить публичные сообщения
+// @Description История общего чата (без адресата)
+// @Tags message
+// @Produce json
+// @Success 200 {array} models.MessageWithAttachment
+// @Failure 401 {string} string "Unauthorized"
+// @Router /messages [get]
 func (h *Handler) GetMessages(w http.ResponseWriter, r *http.Request) {
     if r.Method != http.MethodGet {
         http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -153,7 +160,14 @@ func (h *Handler) GetMessages(w http.ResponseWriter, r *http.Request) {
     json.NewEncoder(w).Encode(messages)
 }
 
-// GET /messages/{email} (история личной переписки)
+// @Summary Получить сообщения по email (личная переписка)
+// @Description Возвращает историю переписки двух пользователей
+// @Tags message
+// @Produce json
+// @Success 200 {array} models.MessageWithAttachment
+// @Failure 400 {string} string "Bad request"
+// @Failure 401 {string} string "Unauthorized"
+// @Router /messages/{email} [get]
 func (h *Handler) GetConversationMessages(w http.ResponseWriter, r *http.Request, otherEmail string) {
     if r.Method != http.MethodGet {
         http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -179,7 +193,18 @@ func (h *Handler) GetConversationMessages(w http.ResponseWriter, r *http.Request
     json.NewEncoder(w).Encode(messages)
 }
 
-// POST /messages/attachment — сообщение с вложением (можно лично, можно публично)
+// @Summary Отправить сообщение с вложением
+// @Description Отправляет файл вместе с текстом
+// @Tags message
+// @Accept multipart/form-data
+// @Produce json
+// @Param file formData file true "Attachment"
+// @Param content formData string false "Message text"
+// @Param recipient formData string false "Recipient email"
+// @Success 201
+// @Failure 400 {string} string "Bad request"
+// @Failure 401 {string} string "Unauthorized"
+// @Router /messages/attachment [post]
 func (h *Handler) PostMessageWithAttachment(w http.ResponseWriter, r *http.Request) {
     if r.Method != http.MethodPost {
         http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -202,7 +227,7 @@ func (h *Handler) PostMessageWithAttachment(w http.ResponseWriter, r *http.Reque
         return
     }
 
-    content := r.FormValue("content") // Может быть пустым
+    content := r.FormValue("content") 
 
     var recipientUserID *string
     recipient := r.FormValue("recipient")
@@ -274,11 +299,17 @@ func (h *Handler) PostMessageWithAttachment(w http.ResponseWriter, r *http.Reque
     json.NewEncoder(w).Encode(map[string]string{"message_id": messageID})
 }
 
-// --- WebSocket endpoint с потокобезопасным хранением клиентов ---
 var upgrader = websocket.Upgrader{
     CheckOrigin: func(r *http.Request) bool { return true },
 }
 
+// @Summary WebSocket чат
+// @Description Подключение к real-time чату с JWT
+// @Tags websocket
+// @Param Authorization header string true "Bearer JWT"
+// @Success 101 "Switching Protocols"
+// @Failure 401 {string} string "Unauthorized"
+// @Router /ws [get]
 func (h *Handler) WebSocket(w http.ResponseWriter, r *http.Request) {
     claims, ok := r.Context().Value("userClaims").(jwt.MapClaims)
     if !ok {
@@ -340,6 +371,13 @@ func (h *Handler) WebSocket(w http.ResponseWriter, r *http.Request) {
     }
 }
 
+// @Summary Получить чаты пользователя
+// @Description Возвращает список чатов (приватных)
+// @Tags chat
+// @Produce json
+// @Success 200 {array} chat.ChatPreview
+// @Failure 401 {string} string "Unauthorized"
+// @Router /chats [get]
 func (h *Handler) GetUserChats(w http.ResponseWriter, r *http.Request) {
     claims, ok := r.Context().Value("userClaims").(jwt.MapClaims)
     if !ok {

@@ -40,7 +40,7 @@ type TokenClaims struct {
     Role   string `json:"role,omitempty"`
 }
 
-// Message - универсальная модель сообщения (для общего и приватных чатов)
+// swagger:model Message
 type Message struct {
     ID              string     `json:"id" db:"id"`
     UserID          string     `json:"user_id" db:"user_id"`
@@ -49,7 +49,7 @@ type Message struct {
     CreatedAt       time.Time  `json:"created_at" db:"created_at"`
 }
 
-
+// swagger:model Attachment
 type Attachment struct {
     ID        int       `json:"id" db:"id"`
     MessageID string    `json:"message_id" db:"message_id"`
@@ -60,7 +60,7 @@ type Attachment struct {
     CreatedAt time.Time `json:"created_at" db:"created_at"`
 }
 
-
+// swagger:model MessageWithAttachment
 type MessageWithAttachment struct {
     ID              string          `json:"id"`
     UserID          string          `json:"user_id"`
@@ -69,9 +69,17 @@ type MessageWithAttachment struct {
     CreatedAt       time.Time       `json:"created_at"`
     Attachment      *AttachmentInfo `json:"attachment,omitempty"`
 }
-
+// swagger:model AttachmentInfo
 type AttachmentInfo struct {
     FileName string `json:"file_name"`
     FilePath string `json:"file_path"`
     MimeType string `json:"mime_type"`
+}
+
+// swagger:model MessagePayload
+type MessagePayload struct {
+    // Текст сообщения
+    Content string `json:"content" example:"Привет!"`
+    // Email получателя (опционально, для приватных сообщений)
+    Recipient *string `json:"recipient,omitempty" example:"friend@example.com"`
 }

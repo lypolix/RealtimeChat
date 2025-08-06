@@ -13,8 +13,8 @@ import (
 
 type Service struct {
     db      *shared.DB
-    clients map[string]*websocket.Conn // map userID → conn
-    mu      sync.RWMutex               // для безопасного доступа к clients
+    clients map[string]*websocket.Conn 
+    mu      sync.RWMutex               
 }
 
 func NewService(db *shared.DB) *Service {
@@ -234,7 +234,7 @@ func (s *Service) GetUserChats(currentUserID string, limit int) ([]ChatPreview, 
                OR (user_id = u.id AND recipient_user_id = $1)
             ORDER BY created_at DESC LIMIT 1
         ) m ON TRUE
-        ORDER BY m.created_at DESC         
+        ORDER BY m.created_at DESC          
         LIMIT $2
     `
     rows, err := s.db.QueryContext(ctx, query, currentUserID, limit)

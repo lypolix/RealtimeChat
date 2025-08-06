@@ -1,0 +1,274 @@
+definitions:
+  auth.AuthResponse:
+    properties:
+      token:
+        type: string
+      user:
+        $ref: '#/definitions/auth.User'
+    type: object
+  auth.Credentials:
+    properties:
+      email:
+        type: string
+      password:
+        type: string
+    type: object
+  auth.User:
+    properties:
+      created_at:
+        example: "2023-07-22T14:12:00Z"
+        type: string
+      email:
+        example: user@example.com
+        type: string
+      id:
+        example: 123e4567-e89b-12d3-a456-426614174000
+        type: string
+      updated_at:
+        example: "2023-07-25T18:34:00Z"
+        type: string
+    type: object
+  chat.ChatPreview:
+    properties:
+      email:
+        type: string
+      last_message:
+        type: string
+      last_timestamp:
+        type: string
+      user_id:
+        type: string
+    type: object
+  models.AttachmentInfo:
+    properties:
+      file_name:
+        type: string
+      file_path:
+        type: string
+      mime_type:
+        type: string
+    type: object
+  models.MessagePayload:
+    properties:
+      content:
+        description: Текст сообщения
+        example: Привет!
+        type: string
+      recipient:
+        description: Email получателя (опционально, для приватных сообщений)
+        example: friend@example.com
+        type: string
+    type: object
+  models.MessageWithAttachment:
+    properties:
+      attachment:
+        $ref: '#/definitions/models.AttachmentInfo'
+      content:
+        type: string
+      created_at:
+        type: string
+      id:
+        type: string
+      recipient_user_id:
+        type: string
+      user_id:
+        type: string
+    type: object
+info:
+  contact: {}
+paths:
+  /chats:
+    get:
+      description: Возвращает список чатов (приватных)
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/chat.ChatPreview'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            type: string
+      summary: Получить чаты пользователя
+      tags:
+      - chat
+  /login:
+    post:
+      consumes:
+      - application/json
+      description: Проверяет email/пароль и возвращает JWT токен
+      parameters:
+      - description: User credentials
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/auth.Credentials'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/auth.AuthResponse'
+        "401":
+          description: Invalid credentials
+          schema:
+            type: string
+      summary: Вход пользователя
+      tags:
+      - auth
+  /messages:
+    get:
+      description: История общего чата (без адресата)
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.MessageWithAttachment'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            type: string
+      summary: Получить публичные сообщения
+      tags:
+      - message
+    post:
+      consumes:
+      - application/json
+      description: Создаёт новое сообщение
+      parameters:
+      - description: Message payload
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/models.MessagePayload'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+        "400":
+          description: Invalid request
+          schema:
+            type: string
+        "401":
+          description: Unauthorized
+          schema:
+            type: string
+      summary: Отправить сообщение (публичное/личное)
+      tags:
+      - message
+  /messages/{email}:
+    get:
+      description: Возвращает историю переписки двух пользователей
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.MessageWithAttachment'
+            type: array
+        "400":
+          description: Bad request
+          schema:
+            type: string
+        "401":
+          description: Unauthorized
+          schema:
+            type: string
+      summary: Получить сообщения по email (личная переписка)
+      tags:
+      - message
+  /messages/attachment:
+    post:
+      consumes:
+      - multipart/form-data
+      description: Отправляет файл вместе с текстом
+      parameters:
+      - description: Attachment
+        in: formData
+        name: file
+        required: true
+        type: file
+      - description: Message text
+        in: formData
+        name: content
+        type: string
+      - description: Recipient email
+        in: formData
+        name: recipient
+        type: string
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+        "400":
+          description: Bad request
+          schema:
+            type: string
+        "401":
+          description: Unauthorized
+          schema:
+            type: string
+      summary: Отправить сообщение с вложением
+      tags:
+      - message
+  /register:
+    post:
+      consumes:
+      - application/json
+      description: Создаёт нового пользователя
+      parameters:
+      - description: User credentials
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/auth.Credentials'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: User created
+          schema:
+            type: string
+        "400":
+          description: Invalid request body
+          schema:
+            type: string
+      summary: Регистрация пользователя
+      tags:
+      - auth
+  /ws:
+    get:
+      description: Подключение к real-time чату с JWT
+      parameters:
+      - description: Bearer JWT
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      responses:
+        "101":
+          description: Switching Protocols
+        "401":
+          description: Unauthorized
+          schema:
+            type: string
+      summary: WebSocket чат
+      tags:
+      - websocket
+swagger: "2.0"

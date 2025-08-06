@@ -3,11 +3,9 @@ FROM golang:1.24 as builder
 
 WORKDIR /app
 
-# Копируем файлы модулей сначала для кэширования
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Копируем остальные файлы
 COPY . .
 
 # Собираем приложение

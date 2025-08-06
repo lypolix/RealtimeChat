@@ -8,53 +8,49 @@ import (
     "RealtimeChat/internal/chat"
     "RealtimeChat/internal/config"
     "RealtimeChat/internal/shared"
+    _ "RealtimeChat/docs"  
+    httpSwagger "github.com/swaggo/http-swagger"
 )
 
 func main() {
-    // 1. Загрузка конфигурации
+
     cfg := config.MustLoad()
 
-    // 2. Инициализация БД
+    
     db, err := shared.NewDB(cfg)
     if err != nil {
         log.Fatalf("Failed to connect to database: %v", err)
     }
     defer db.Close()
 
-    // 3. Загрузка JWT ключей
     if err := shared.LoadKeys("config/private.pem", "config/public.pem"); err != nil {
         log.Fatalf("Failed to load JWT keys: %v", err)
     }
 
-    // 4. Инициализация сервисов
     authService := auth.NewService(db)
     authHandler := auth.NewHandler(authService)
     chatService := chat.NewService(db)
     chatHandler := chat.NewHandler(chatService)
 
+    http.Handle("/swagger/", httpSwagger.WrapHandler)
 
     http.Handle("/chats", shared.JWTMiddleware(http.HandlerFunc(chatHandler.GetUserChats)))
 
-    // 5. Маршруты для регистрации и логина
     http.HandleFunc("/register", authHandler.Register)
     http.HandleFunc("/login", authHandler.Login)
 
-    // 6. Защищённый эндпоинт (пример)
     http.Handle("/protected", shared.JWTMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         w.Write([]byte("Protected area"))
     })))
 
-
-    // 7. Вложение (фото/файл) — обязательно первым!
     http.Handle("/messages/attachment", shared.JWTMiddleware(http.HandlerFunc(chatHandler.PostMessageWithAttachment)))
 
-    // 8. Личная переписка: GET /messages/{email}
     http.Handle("/messages/", shared.JWTMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         if r.Method != http.MethodGet {
             http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
             return
         }
-        // /messages/{email}
+
         path := r.URL.Path
         prefix := "/messages/"
         if !strings.HasPrefix(path, prefix) || len(path) <= len(prefix) {
@@ -65,7 +61,6 @@ func main() {
         chatHandler.GetConversationMessages(w, r, email)
     })))
 
-    // 9. Основной чат — GET + POST (общий)
     http.Handle("/messages", shared.JWTMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         switch r.Method {
         case http.MethodPost:
@@ -77,11 +72,8 @@ func main() {
         }
     })))
 
-
-    // 10. WebSocket endpoint — всегда добавлять после всех остальных /messages!
     http.Handle("/ws", shared.JWTMiddleware(http.HandlerFunc(chatHandler.WebSocket)))
 
-    // 11. Запуск сервера
     log.Printf("Server starting on :%s", cfg.Server.Port)
     log.Fatal(http.ListenAndServe(":"+cfg.Server.Port, nil))
 }
