@@ -9,6 +9,8 @@ import (
 	"time"
 	"fmt"
 	"github.com/golang-jwt/jwt/v5"
+	"log"
+	
 )
 
 var (
@@ -38,45 +40,55 @@ func LoadKeys(privateKeyPath, publicKeyPath string) error {
 }
 
 func extractToken(r *http.Request) string {
-	authHeader := r.Header.Get("Authorization")
-	if authHeader == "" {
-		return ""
-	}
-	
-	// Удаляем префикс "Bearer "
-	return strings.TrimPrefix(authHeader, "Bearer ")
+    authHeader := r.Header.Get("Authorization")
+    if authHeader == "" {
+        return ""
+    }
+    parts := strings.Fields(authHeader)
+    if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
+        return ""
+    }
+    return parts[1]
 }
+
 
 // JWTMiddleware проверяет JWT токен в запросе
 func JWTMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tokenString := extractToken(r)
-		if tokenString == "" {
-			http.Error(w, "Authorization header missing", http.StatusUnauthorized)
-			return
-		}
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        log.Println("Authorization header:", r.Header.Get("Authorization"))
+        
+        tokenString := extractToken(r)
+        if tokenString == "" {
+            http.Error(w, "Authorization header missing", http.StatusUnauthorized)
+            return
+        }
 
-		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-			// Проверяем метод подписи
-			if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
-				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-			}
-			return PublicKey, nil
-		})
+        log.Println("Token:", tokenString)
+        
+        token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+            if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
+                return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+            }
+            return PublicKey, nil
+        })
 
-		if err != nil || !token.Valid {
-			http.Error(w, "Invalid token", http.StatusUnauthorized)
-			return
-		}
+        if err != nil {
+            log.Printf("Token validation error: %v", err)
+            http.Error(w, "Invalid token: "+err.Error(), http.StatusUnauthorized)
+            return
+        }
 
-		// Добавляем claims в контекст
-		if claims, ok := token.Claims.(jwt.MapClaims); ok {
-			ctx := context.WithValue(r.Context(), "userClaims", claims)
-			r = r.WithContext(ctx)
-		}
+        if !token.Valid {
+            log.Println("Token is invalid")
+            http.Error(w, "Invalid token", http.StatusUnauthorized)
+            return
+        }
 
-		next.ServeHTTP(w, r)
-	})
+        log.Printf("Valid token with claims: %+v", token.Claims)
+        
+        ctx := context.WithValue(r.Context(), "userClaims", token.Claims)
+        next.ServeHTTP(w, r.WithContext(ctx))
+    })
 }
 
 // GenerateToken создает новый JWT токен
