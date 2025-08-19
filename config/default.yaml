@@ -7,3 +7,6 @@ database:
   password: "postgres"
   host: "postgres"
   port: "5432"
+redis:
+  host: "redis"
+  port: "6379"

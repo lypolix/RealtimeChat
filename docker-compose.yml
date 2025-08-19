@@ -38,6 +38,14 @@ services:
     networks:
       - backend
     restart: unless-stopped
+  
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    networks:
+      - backend
 
 volumes:
   pgdata:
