@@ -26,12 +26,14 @@
 ### 1. Клонируй репозиторий и перейди в папку
 
 git clone https://github.com/yourname/RealtimeChat.git
+
 cd RealtimeChat
 
 
 ### 2. Создай/проверь `.env` в корне
 
 Пример:
+
 SERVER_PORT=8080
 DB_NAME=realtimechat
 DB_USER=postgres
@@ -44,7 +46,6 @@ text
 ### 3. Запусти через docker-compose
 
 docker-compose up --build
-text
 
 - Приложение на http://localhost:8080
 - PostgreSQL и Redis стартуют автоматически
