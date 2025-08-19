@@ -1,24 +1,26 @@
 package chat
 
 import (
+    "RealtimeChat/internal/shared"
     "encoding/json"
     "fmt"
+    "io"
     "log"
     "net/http"
+    "os"
     "sync"
     "time"
-    "github.com/gorilla/websocket"
+
     "github.com/golang-jwt/jwt/v5"
-    "io"
-    "os"
     "github.com/google/uuid"
+    "github.com/gorilla/websocket"
 )
 
-type Handler struct {
-    service *Service
 
-    clients   map[string]*websocket.Conn 
-    clientsMu sync.RWMutex               
+type Handler struct {
+    service   *Service
+    clients   map[string]*websocket.Conn
+    clientsMu sync.RWMutex
 }
 
 func NewHandler(service *Service) *Handler {
@@ -68,12 +70,12 @@ func (h *Handler) sendToUsers(userIDs []string, msg map[string]interface{}) {
     }
 }
 
-// @Summary Отправить сообщение (публичное/личное)
-// @Description Создаёт новое сообщение
+// @Summary Отправить сообщение (публичное или личное)
+// @Description Создаёт новое сообщение. При отсутствии recipient — публичное
 // @Tags message
 // @Accept json
 // @Produce json
-// @Param body body models.MessagePayload true "Message payload"
+// @Param body body map[string]interface{} true "Message payload: content и optional recipient (email)"
 // @Success 201
 // @Failure 400 {string} string "Invalid request"
 // @Failure 401 {string} string "Unauthorized"
@@ -93,10 +95,13 @@ func (h *Handler) PostMessage(w http.ResponseWriter, r *http.Request) {
         http.Error(w, "Unauthorized", http.StatusUnauthorized)
         return
     }
+    if err := shared.SetUserOnline(userID); err != nil {
+        log.Printf("Failed to set user online: %v", err)
+    }
 
     var req struct {
         Content   string  `json:"content"`
-        Recipient *string `json:"recipient"` 
+        Recipient *string `json:"recipient"`
     }
     if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
         http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -131,7 +136,7 @@ func (h *Handler) PostMessage(w http.ResponseWriter, r *http.Request) {
         "created_at":        time.Now(),
     }
     if recipientUserID == nil {
-        h.sendBroadcast(msgPayload) 
+        h.sendBroadcast(msgPayload)
     } else {
         h.sendToUsers([]string{userID, *recipientUserID}, msgPayload)
     }
@@ -150,6 +155,15 @@ func (h *Handler) GetMessages(w http.ResponseWriter, r *http.Request) {
         http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
         return
     }
+    claims, ok := r.Context().Value("userClaims").(jwt.MapClaims)
+    if ok {
+        userID := fmt.Sprintf("%v", claims["user_id"])
+        if userID != "" && userID != "<nil>" {
+            if err := shared.SetUserOnline(userID); err != nil {
+                log.Printf("Failed to set user online: %v", err)
+            }
+        }
+    }
     messages, err := h.service.GetGeneralMessages(50)
     if err != nil {
         log.Printf("Failed to fetch messages: %v", err)
@@ -160,11 +174,12 @@ func (h *Handler) GetMessages(w http.ResponseWriter, r *http.Request) {
     json.NewEncoder(w).Encode(messages)
 }
 
-// @Summary Получить сообщения по email (личная переписка)
-// @Description Возвращает историю переписки двух пользователей
+// @Summary Получить переписку с пользователем
+// @Description Возвращает историю переписки с пользователем по email. В ответе — онлайн статус собеседника
 // @Tags message
 // @Produce json
-// @Success 200 {array} models.MessageWithAttachment
+// @Param email path string true "Email собеседника"
+// @Success 200 {object} map[string]interface{}
 // @Failure 400 {string} string "Bad request"
 // @Failure 401 {string} string "Unauthorized"
 // @Router /messages/{email} [get]
@@ -183,6 +198,27 @@ func (h *Handler) GetConversationMessages(w http.ResponseWriter, r *http.Request
         http.Error(w, "Unauthorized", http.StatusUnauthorized)
         return
     }
+    if err := shared.SetUserOnline(currentUserID); err != nil {
+        log.Printf("Failed to set user online: %v", err)
+    }
+
+    var otherUserID string
+    err := h.service.db.QueryRowContext(
+        r.Context(),
+        `SELECT id FROM users WHERE email = $1`,
+        otherEmail,
+    ).Scan(&otherUserID)
+    if err != nil {
+        http.Error(w, "User not found", http.StatusBadRequest)
+        return
+    }
+
+    isOnline, err := shared.IsUserOnline(otherUserID)
+    if err != nil {
+        log.Printf("Failed to check online status: %v", err)
+        isOnline = false
+    }
+
     messages, err := h.service.GetConversationMessages(currentUserID, otherEmail, 50)
     if err != nil {
         log.Printf("Failed to fetch conversation: %v", err)
@@ -190,18 +226,25 @@ func (h *Handler) GetConversationMessages(w http.ResponseWriter, r *http.Request
         return
     }
     w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(messages)
+    json.NewEncoder(w).Encode(map[string]interface{}{
+        "messages": messages,
+        "other_user": map[string]interface{}{
+            "id":        otherUserID,
+            "email":     otherEmail,
+            "is_online": isOnline,
+        },
+    })
 }
 
 // @Summary Отправить сообщение с вложением
-// @Description Отправляет файл вместе с текстом
+// @Description Отправляет файл с сообщением
 // @Tags message
 // @Accept multipart/form-data
 // @Produce json
-// @Param file formData file true "Attachment"
-// @Param content formData string false "Message text"
-// @Param recipient formData string false "Recipient email"
-// @Success 201
+// @Param file formData file true "Файл вложения"
+// @Param content formData string false "Текст сообщения"
+// @Param recipient formData string false "Email получателя"
+// @Success 201 {object} map[string]string
 // @Failure 400 {string} string "Bad request"
 // @Failure 401 {string} string "Unauthorized"
 // @Router /messages/attachment [post]
@@ -220,6 +263,9 @@ func (h *Handler) PostMessageWithAttachment(w http.ResponseWriter, r *http.Reque
         http.Error(w, "Unauthorized", http.StatusUnauthorized)
         return
     }
+    if err := shared.SetUserOnline(userID); err != nil {
+        log.Printf("Failed to set user online: %v", err)
+    }
 
     err := r.ParseMultipartForm(10 << 20)
     if err != nil {
@@ -227,7 +273,7 @@ func (h *Handler) PostMessageWithAttachment(w http.ResponseWriter, r *http.Reque
         return
     }
 
-    content := r.FormValue("content") 
+    content := r.FormValue("content")
 
     var recipientUserID *string
     recipient := r.FormValue("recipient")
@@ -294,7 +340,6 @@ func (h *Handler) PostMessageWithAttachment(w http.ResponseWriter, r *http.Reque
     } else {
         h.sendToUsers([]string{userID, *recipientUserID}, msgPayload)
     }
-
     w.WriteHeader(http.StatusCreated)
     json.NewEncoder(w).Encode(map[string]string{"message_id": messageID})
 }
@@ -321,6 +366,8 @@ func (h *Handler) WebSocket(w http.ResponseWriter, r *http.Request) {
         http.Error(w, "Unauthorized", http.StatusUnauthorized)
         return
     }
+    _ = shared.SetUserOnline(userID)
+
     conn, err := upgrader.Upgrade(w, r, nil)
     if err != nil {
         http.Error(w, "Failed to upgrade connection", http.StatusInternalServerError)
@@ -332,6 +379,7 @@ func (h *Handler) WebSocket(w http.ResponseWriter, r *http.Request) {
         conn.Close()
     }()
     for {
+        _ = shared.SetUserOnline(userID)
         var msg struct {
             Content   string  `json:"content"`
             Recipient *string `json:"recipient"`
@@ -352,7 +400,6 @@ func (h *Handler) WebSocket(w http.ResponseWriter, r *http.Request) {
                 recipientUserID = &id
             }
         }
-        
         if err := h.service.SaveMessage(userID, recipientUserID, msg.Content); err != nil {
             log.Printf("WebSocket: failed to save message: %v", err)
             continue
@@ -372,10 +419,10 @@ func (h *Handler) WebSocket(w http.ResponseWriter, r *http.Request) {
 }
 
 // @Summary Получить чаты пользователя
-// @Description Возвращает список чатов (приватных)
+// @Description Возвращает список приватных чатов пользователя с онлайн-статусом собеседников
 // @Tags chat
 // @Produce json
-// @Success 200 {array} chat.ChatPreview
+// @Success 200 {array} ChatPreview
 // @Failure 401 {string} string "Unauthorized"
 // @Router /chats [get]
 func (h *Handler) GetUserChats(w http.ResponseWriter, r *http.Request) {
@@ -389,6 +436,11 @@ func (h *Handler) GetUserChats(w http.ResponseWriter, r *http.Request) {
     if err != nil {
         http.Error(w, "Failed to fetch chats", http.StatusInternalServerError)
         return
+    }
+    for i := range chats {
+        otherUserID := chats[i].UserID
+        isOnline, _ := shared.IsUserOnline(otherUserID)
+        chats[i].IsOnline = isOnline
     }
     w.Header().Set("Content-Type", "application/json")
     json.NewEncoder(w).Encode(chats)

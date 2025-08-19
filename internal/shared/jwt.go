@@ -18,9 +18,7 @@ var (
 	PublicKey  *rsa.PublicKey
 )
 
-// LoadKeys загружает RSA ключи из файлов
 func LoadKeys(privateKeyPath, publicKeyPath string) error {
-	// Загрузка приватного ключа
 	privateBytes, err := os.ReadFile(privateKeyPath)
 	if err != nil {
 		return err
@@ -30,7 +28,6 @@ func LoadKeys(privateKeyPath, publicKeyPath string) error {
 		return err
 	}
 
-	// Загрузка публичного ключа
 	publicBytes, err := os.ReadFile(publicKeyPath)
 	if err != nil {
 		return err
@@ -52,7 +49,6 @@ func extractToken(r *http.Request) string {
 }
 
 
-// JWTMiddleware проверяет JWT токен в запросе
 func JWTMiddleware(next http.Handler) http.Handler {
     return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         log.Println("Authorization header:", r.Header.Get("Authorization"))
@@ -91,7 +87,6 @@ func JWTMiddleware(next http.Handler) http.Handler {
     })
 }
 
-// GenerateToken создает новый JWT токен
 func GenerateToken(userID string) (string, error) {
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
 		"user_id": userID,

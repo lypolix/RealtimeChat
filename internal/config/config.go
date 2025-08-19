@@ -2,19 +2,21 @@ package config
 
 import (
 	"fmt"
+	"os"
+
 	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
-	"os"
 )
 
 type Config struct {
-	Server   Server   `yaml:"server"`   
-	Database Database `yaml:"database"` 
+	Server   Server   `yaml:"server"`
+	Database Database `yaml:"database"`
+	Redis Redis `yaml:"redis"`
 }
 
 type Server struct {
-	Host string `yaml:"host" env-default:":8080"`     
-	Port string `yaml:"port" env-default:"localhost"` 
+	Host string `yaml:"host" env-default:":8080"`
+	Port string `yaml:"port" env-default:"localhost"`
 }
 
 type Database struct {
@@ -23,6 +25,11 @@ type Database struct {
 	Password string `yaml:"password" env-default:"postgres"`
 	Host     string `yaml:"host" env-default:"localhost"`
 	Port     string `yaml:"port" env-default:"5432"`
+}
+
+type Redis struct {
+	Host string `yaml:"host"`
+	Port string `yaml:"port"`
 }
 
 func MustLoad() *Config {

@@ -5,34 +5,29 @@ import (
     "github.com/golang-jwt/jwt/v5"
 )
 
-// User - модель пользователя системы
 type User struct {
     ID           string    `json:"id" db:"id"`
     Email        string    `json:"email" db:"email"`
-    PasswordHash string    `json:"-" db:"password_hash"` // Никогда не возвращается в JSON
+    PasswordHash string    `json:"-" db:"password_hash"` 
     CreatedAt    time.Time `json:"created_at" db:"created_at"`
     UpdatedAt    time.Time `json:"updated_at" db:"updated_at"`
 }
 
-// LoginRequest - модель для входящего запроса на вход
 type LoginRequest struct {
     Email    string `json:"email" validate:"required,email"`
     Password string `json:"password" validate:"required,min=8"`
 }
 
-// RegisterRequest - модель для регистрации пользователя
 type RegisterRequest struct {
     Email    string `json:"email" validate:"required,email"`
     Password string `json:"password" validate:"required,min=8"`
 }
 
-// AuthResponse - модель ответа с токеном (и опционально User, если нужно)
 type AuthResponse struct {
     Token string `json:"token"`
     User  User   `json:"user"`
 }
 
-// TokenClaims - кастомные claims для JWT токена
 type TokenClaims struct {
     jwt.RegisteredClaims
     UserID string `json:"user_id"`
@@ -78,8 +73,6 @@ type AttachmentInfo struct {
 
 // swagger:model MessagePayload
 type MessagePayload struct {
-    // Текст сообщения
     Content string `json:"content" example:"Привет!"`
-    // Email получателя (опционально, для приватных сообщений)
     Recipient *string `json:"recipient,omitempty" example:"friend@example.com"`
 }
